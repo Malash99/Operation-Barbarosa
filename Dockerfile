@@ -11,21 +11,26 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
-# Replace the existing pip install line with:
-    RUN pip3 install \
+RUN pip3 install \
     numpy==1.23.5 \
     pandas==1.5.3 \
     matplotlib \
-    tensorflow \
-    pyquaternion \
-    opencv-python
+    pyquaternion
 
-# Create workspace
-RUN mkdir -p /catkin_ws/src
-WORKDIR /catkin_ws/src
+# Create directories for project
+RUN mkdir -p /app/data /app/output
 
 # Copy your code into the container
-COPY . /app
+COPY scripts/ /app/scripts/
+
+# Set the working directory
 WORKDIR /app
 
+# Create an entrypoint script
+RUN echo '#!/bin/bash\n\
+source /opt/ros/noetic/setup.bash\n\
+exec "$@"' > /entrypoint.sh && \
+chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]
