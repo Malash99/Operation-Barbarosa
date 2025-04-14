@@ -16,7 +16,7 @@ python3 scripts/traj_reader.py
 python3 scripts/image_pair.py
 python3 scripts/pairs_with_trajectory.py
 python3 scripts/visualization.py
-
+.
 ////////
 
 permanent fix for the ocker files 
