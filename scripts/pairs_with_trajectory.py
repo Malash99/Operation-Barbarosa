@@ -2,6 +2,7 @@ import pandas as pd
 import os
 import argparse
 import numpy as np
+import re
 
 def match_images_with_gt(image_pairs_dir, trajectory_csv, output_csv=None):
     """
@@ -21,6 +22,15 @@ def match_images_with_gt(image_pairs_dir, trajectory_csv, output_csv=None):
     trajectory = pd.read_csv(trajectory_csv)
     print(f"Loaded {len(trajectory)} trajectory points")
     
+    # Extract camera ID from directory name
+    camera_id = None
+    dir_name = os.path.basename(image_pairs_dir)
+    if 'cam' in dir_name:
+        match = re.search(r'cam(\d+)', dir_name)
+        if match:
+            camera_id = int(match.group(1))
+            print(f"Detected camera ID: {camera_id}")
+    
     # Get list of image pairs
     pairs = sorted([d for d in os.listdir(image_pairs_dir) if d.startswith('pair_')])
     print(f"Found {len(pairs)} image pairs")
@@ -30,6 +40,9 @@ def match_images_with_gt(image_pairs_dir, trajectory_csv, output_csv=None):
     for pair in pairs:
         pair_path = os.path.join(image_pairs_dir, pair)
         timestamp_file = os.path.join(pair_path, 'timestamp.txt')
+        
+        # Extract pair number from folder name
+        pair_num = int(pair.split('_')[1])
         
         if os.path.exists(timestamp_file):
             with open(timestamp_file, 'r') as f:
@@ -53,6 +66,8 @@ def match_images_with_gt(image_pairs_dir, trajectory_csv, output_csv=None):
             
             results.append({
                 'pair_id': pair,
+                'pair_num': pair_num,
+                'camera_id': camera_id,
                 'prev_timestamp': prev_timestamp,
                 'curr_timestamp': curr_timestamp,
                 'trajectory_timestamp': gt_data['timestamp'],
@@ -72,6 +87,8 @@ def match_images_with_gt(image_pairs_dir, trajectory_csv, output_csv=None):
     
     # Print summary
     print(f"Successfully matched {len(result_df)} image pairs with trajectory data")
+    if camera_id is not None:
+        print(f"All data is from camera {camera_id}")
     
     if output_csv:
         result_df.to_csv(output_csv, index=False)
@@ -79,16 +96,89 @@ def match_images_with_gt(image_pairs_dir, trajectory_csv, output_csv=None):
     
     return result_df
 
+def process_all_cameras(base_dir, trajectory_csv, output_dir):
+    """
+    Process image pairs from all camera directories and combine results
+    
+    Args:
+        base_dir: Base directory containing camera folders
+        trajectory_csv: Path to trajectory CSV file
+        output_dir: Directory to save individual and combined CSV files
+    """
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Find all camera directories
+    camera_dirs = [d for d in os.listdir(base_dir) if 'cam' in d and os.path.isdir(os.path.join(base_dir, d))]
+    
+    if not camera_dirs:
+        print("No camera directories found. Expected directories containing 'cam' in the name.")
+        return
+    
+    all_data = []
+    
+    # Process each camera directory
+    for cam_dir in camera_dirs:
+        cam_path = os.path.join(base_dir, cam_dir)
+        print(f"\nProcessing camera directory: {cam_path}")
+        
+        # Individual output CSV for this camera
+        cam_output = os.path.join(output_dir, f"{cam_dir}_gt.csv")
+        
+        # Match image pairs with ground truth data
+        cam_data = match_images_with_gt(cam_path, trajectory_csv, cam_output)
+        all_data.append(cam_data)
+    
+    # Combine all camera data
+    combined_data = pd.concat(all_data, ignore_index=True)
+    
+    # Save combined dataset
+    combined_output = os.path.join(output_dir, "all_cameras_with_gt.csv")
+    combined_data.to_csv(combined_output, index=False)
+    print(f"\nCombined data from all cameras saved to {combined_output}")
+    print(f"Total image pairs: {len(combined_data)}")
+    
+    # Print camera statistics
+    camera_counts = combined_data['camera_id'].value_counts().sort_index()
+    print("\nImages per camera:")
+    for camera, count in camera_counts.items():
+        print(f"  Camera {camera}: {count} image pairs")
+    
+    return combined_data
+
 def main():
     parser = argparse.ArgumentParser(description='Match image pairs with trajectory data')
-    parser.add_argument('--pairs', required=True, help='Directory containing image pairs')
+    
+    # Create mutually exclusive group for single vs all processing
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--process_all', action='store_true', help='Process all camera directories')
+    group.add_argument('--pairs', help='Directory containing image pairs (for single camera processing)')
+    
+    # Common arguments
     parser.add_argument('--trajectory', required=True, help='CSV file with trajectory data')
-    parser.add_argument('--output', help='Path to save matched data CSV')
+    
+    # Arguments for single camera mode
+    parser.add_argument('--output', help='Path to save matched data CSV (for single camera)')
+    
+    # Arguments for process_all mode
+    parser.add_argument('--base_dir', help='Base directory containing camera folders (for --process_all)')
+    parser.add_argument('--output_dir', help='Directory to save outputs (for --process_all)')
     
     args = parser.parse_args()
     
-    matched_data = match_images_with_gt(args.pairs, args.trajectory, args.output)
-    print(matched_data.head())
+    if args.process_all:
+        if not args.base_dir:
+            parser.error("--base_dir is required when using --process_all")
+        if not args.output_dir:
+            parser.error("--output_dir is required when using --process_all")
+            
+        combined_data = process_all_cameras(args.base_dir, args.trajectory, args.output_dir)
+    else:
+        if not args.pairs:
+            parser.error("--pairs is required when not using --process_all")
+        matched_data = match_images_with_gt(args.pairs, args.trajectory, args.output)
+        print(matched_data.head())
 
 if __name__ == "__main__":
     main()
+#     main()

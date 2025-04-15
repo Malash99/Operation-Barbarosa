@@ -11,17 +11,18 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
+# Use tensorflow-cpu instead of tensorflow to avoid GPU dependencies
 RUN pip3 install \
     numpy==1.23.5 \
     pandas==1.5.3 \
     matplotlib \
-    tensorflow==2.10.0 \
+    tensorflow-cpu==2.10.0 \
     scikit-learn \
     tqdm \
     pyquaternion
 
 # Create directories for project
-RUN mkdir -p /app/data /app/output
+RUN mkdir -p /app/data /app/output /app/scripts
 
 # Copy your code into the container
 COPY scripts/ /app/scripts/
@@ -32,6 +33,7 @@ WORKDIR /app
 # Create an entrypoint script
 RUN echo '#!/bin/bash\n\
 source /opt/ros/noetic/setup.bash\n\
+export CUDA_VISIBLE_DEVICES=""\n\
 exec "$@"' > /entrypoint.sh && \
 chmod +x /entrypoint.sh
 

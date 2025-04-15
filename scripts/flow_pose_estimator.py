@@ -15,6 +15,11 @@ import argparse
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
+import os
+print("\n=== DEBUG START ===")
+print(f"Current directory: {os.getcwd()}")
+print(f"Files in /app/output: {os.listdir('/app/output')[:5]}...")
+
 # Ensure TensorFlow is using GPU if available
 physical_devices = tf.config.list_physical_devices('GPU')
 if len(physical_devices) > 0:
@@ -22,8 +27,8 @@ if len(physical_devices) > 0:
     print("Using GPU for training")
 else:
     print("No GPU found. Using CPU for training")
-    
-def build_simplified_flownet(input_shape=(256, 256, 6)):
+
+def build_simplified_flownet(input_shape=(256, 256, 6), output_dim=4):
     """
     Build a simplified FlowNet model based on FlowNetS architecture
     """
@@ -76,7 +81,7 @@ def build_simplified_flownet(input_shape=(256, 256, 6)):
     drop2 = Dropout(0.3)(bn2)
     
     # Final regression output
-    pose_output = Dense(4, activation='linear', name='pose_output')(drop2)
+    pose_output = Dense(output_dim, activation='linear', name='pose_output')(drop2)
     
     # Combined model with dual outputs
     combined_model = Model(inputs=inputs, outputs=[flow, pose_output])
@@ -144,50 +149,127 @@ def preprocess_image_pair(prev_img_path, curr_img_path, target_size=(256, 256)):
     
     return stacked_imgs
 
-def load_dataset(dataset_csv, root_dir=None, batch_size=16, shuffle=True):
+def load_dataset_by_camera(dataset_csv, train_cameras=[0, 1, 2, 3], test_cameras=[4], root_dir=None):
     """
-    Load the dataset from the CSV file
+    Load the dataset from the CSV file and split by camera ID
     """
-    # Read the CSV file
-    data = pd.read_csv(dataset_csv)
+    # Read the CSV file ensuring proper types
+    data = pd.read_csv(dataset_csv, dtype={'camera_id': int})
     print(f"Loaded {len(data)} image pairs from {dataset_csv}")
     
-    # Extract image paths and target values
-    image_pairs = []
-    targets = []
+    # Check if we have delta_pitch and delta_roll columns
+    has_pitch_roll = 'delta_pitch' in data.columns and 'delta_roll' in data.columns
+    if has_pitch_roll:
+        print("Delta pitch and roll data available - using all 6DOF motion parameters")
+    else:
+        print("Warning: delta_pitch and delta_roll not found in dataset - using only 4DOF motion parameters")
     
-    for _, row in tqdm(data.iterrows(), total=len(data), desc="Loading dataset"):
-        pair_id = row['pair_id']
-        pair_path = os.path.join(root_dir, pair_id) if root_dir else row['image_pair_path']
+    # Debug: Show camera distribution
+    print("\nCamera ID distribution in CSV:")
+    print(data['camera_id'].value_counts().sort_index())
+    
+    # Convert camera IDs to integers if they're strings
+    train_cameras = [int(cam) for cam in train_cameras]
+    test_cameras = [int(cam) for cam in test_cameras]
+    
+    # Filter data
+    train_data = data[data['camera_id'].isin(train_cameras)]
+    test_data = data[data['camera_id'].isin(test_cameras)]
+    
+    print(f"\nTraining data: {len(train_data)} samples from cameras {train_cameras}")
+    print(f"Testing data: {len(test_data)} samples from cameras {test_cameras}")
+    
+    # Process training data
+    X_train = []
+    y_train = []
+    missing_count = 0
+    
+    for _, row in tqdm(train_data.iterrows(), total=len(train_data), desc="Loading training data"):
+        pair_path = row['image_pair_path']
+        prev_path = os.path.join(pair_path, 'prev.png')
+        curr_path = os.path.join(pair_path, 'current.png')
         
-        prev_img_path = os.path.join(pair_path, 'prev.png')
-        curr_img_path = os.path.join(pair_path, 'current.png')
-        
-        # Skip if files don't exist
-        if not os.path.exists(prev_img_path) or not os.path.exists(curr_img_path):
-            print(f"Warning: Missing images for {pair_id}")
+        if not (os.path.exists(prev_path) and os.path.exists(curr_path)):
+            missing_count += 1
             continue
         
-        # Target values: delta_x, delta_y, delta_z, delta_yaw
-        target = np.array([
-            row['delta_x'], 
-            row['delta_y'], 
-            row['delta_z'], 
-            row['delta_yaw']
-        ], dtype=np.float32)
+        X_train.append((prev_path, curr_path))
         
-        image_pairs.append((prev_img_path, curr_img_path))
-        targets.append(target)
+        # Create target vector based on available data
+        if has_pitch_roll:
+            y_train.append([
+                float(row['delta_x']),
+                float(row['delta_y']), 
+                float(row['delta_z']),
+                float(row['delta_yaw']),
+                float(row['delta_pitch']),
+                float(row['delta_roll'])
+            ])
+        else:
+            y_train.append([
+                float(row['delta_x']),
+                float(row['delta_y']), 
+                float(row['delta_z']),
+                float(row['delta_yaw'])
+            ])
     
-    # Split into training and validation sets
+    if missing_count > 0:
+        print(f"Warning: Missing {missing_count} training image pairs")
+    
+    # Process test data
+    X_test = []
+    y_test = []
+    missing_count = 0
+    
+    for _, row in tqdm(test_data.iterrows(), total=len(test_data), desc="Loading test data"):
+        pair_path = row['image_pair_path']
+        prev_path = os.path.join(pair_path, 'prev.png')
+        curr_path = os.path.join(pair_path, 'current.png')
+        
+        if not (os.path.exists(prev_path) and os.path.exists(curr_path)):
+            missing_count += 1
+            continue
+        
+        X_test.append((prev_path, curr_path))
+        
+        # Create target vector based on available data
+        if has_pitch_roll:
+            y_test.append([
+                float(row['delta_x']),
+                float(row['delta_y']),
+                float(row['delta_z']),
+                float(row['delta_yaw']),
+                float(row['delta_pitch']),
+                float(row['delta_roll'])
+            ])
+        else:
+            y_test.append([
+                float(row['delta_x']),
+                float(row['delta_y']),
+                float(row['delta_z']),
+                float(row['delta_yaw'])
+            ])
+    
+    if missing_count > 0:
+        print(f"Warning: Missing {missing_count} test image pairs")
+    
+    # Split training into train and validation
     X_train, X_val, y_train, y_val = train_test_split(
-        image_pairs, targets, test_size=0.2, random_state=42
+        X_train, np.array(y_train),
+        test_size=0.2,
+        random_state=42
     )
     
-    print(f"Training set: {len(X_train)} samples")
-    print(f"Validation set: {len(X_val)} samples")
+    print("\nFinal dataset sizes:")
+    print(f"Training: {len(X_train)} samples")
+    print(f"Validation: {len(X_val)} samples")
+    print(f"Testing: {len(X_test)} samples")
     
-    return X_train, X_val, y_train, y_val
+    # Determine output dimension for the model
+    output_dim = 6 if has_pitch_roll else 4
+    print(f"Motion parameters dimension: {output_dim}")
+    
+    return X_train, X_val, X_test, np.array(y_train), np.array(y_val), np.array(y_test), output_dim
 
 def data_generator(image_pairs, targets, batch_size=16, target_size=(256, 256), shuffle=True):
     """
@@ -335,19 +417,16 @@ def evaluate_model(model, X_test, y_test, batch_size=16):
     
     return y_pred, mse, rmse, mae
 
-def predict_trajectory(model, start_pos, X_test, plot_save_path=None):
+def predict_camera_trajectory(model, X_test, y_test, start_pos=[0, 0, 0, 0], plot_save_path=None):
     """
-    Predict trajectory from a sequence of image pairs and visualize it
+    Predict trajectory for a specific camera and compare with ground truth
     """
-    # Start from the initial position [x, y, z, yaw]
-    current_pos = np.array(start_pos)
-    
-    # Store the true and predicted trajectories
-    true_trajectory = [current_pos.copy()]
-    pred_trajectory = [current_pos.copy()]
+    # Initialize trajectories
+    true_trajectory = [np.array(start_pos)]
+    pred_trajectory = [np.array(start_pos)]
     
     # Process each image pair
-    for i, (prev_img_path, curr_img_path) in enumerate(tqdm(X_test, desc="Predicting trajectory")):
+    for i, (prev_img_path, curr_img_path) in enumerate(tqdm(X_test, desc="Predicting camera trajectory")):
         try:
             # Preprocess the image pair
             stacked_imgs = preprocess_image_pair(prev_img_path, curr_img_path)
@@ -357,18 +436,18 @@ def predict_trajectory(model, start_pos, X_test, plot_save_path=None):
             _, pose_pred = model.predict(stacked_imgs)
             delta_pred = pose_pred[0]
             
-            # Get the true delta values from the test set
+            # Get the true delta values
             delta_true = y_test[i]
             
-            # Update the position with predicted delta
-            current_pos_pred = pred_trajectory[-1].copy()
-            current_pos_pred[0] += delta_pred[0]  # x
-            current_pos_pred[1] += delta_pred[1]  # y
-            current_pos_pred[2] += delta_pred[2]  # z
-            current_pos_pred[3] += delta_pred[3]  # yaw
-            pred_trajectory.append(current_pos_pred)
+            # Update predicted position
+            current_pos = pred_trajectory[-1].copy()
+            current_pos[0] += delta_pred[0]  # x
+            current_pos[1] += delta_pred[1]  # y
+            current_pos[2] += delta_pred[2]  # z
+            current_pos[3] += delta_pred[3]  # yaw
+            pred_trajectory.append(current_pos)
             
-            # Update the position with true delta for comparison
+            # Update ground truth position
             current_pos_true = true_trajectory[-1].copy()
             current_pos_true[0] += delta_true[0]  # x
             current_pos_true[1] += delta_true[1]  # y
@@ -383,38 +462,70 @@ def predict_trajectory(model, start_pos, X_test, plot_save_path=None):
     true_trajectory = np.array(true_trajectory)
     pred_trajectory = np.array(pred_trajectory)
     
-    # Plot the trajectories
-    fig, axes = plt.subplots(2, 1, figsize=(12, 10))
+    # Calculate error metrics
+    pos_error = np.sqrt(np.sum((true_trajectory[:, :3] - pred_trajectory[:, :3])**2, axis=1))
+    yaw_error = np.abs(true_trajectory[:, 3] - pred_trajectory[:, 3])
+    
+    mean_pos_error = np.mean(pos_error)
+    mean_yaw_error = np.mean(yaw_error)
+    
+    # Create enhanced visualization
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     
     # XY plot (top view)
-    axes[0].plot(true_trajectory[:, 0], true_trajectory[:, 1], 'b-', label='Ground Truth')
-    axes[0].plot(pred_trajectory[:, 0], pred_trajectory[:, 1], 'r--', label='Predicted')
-    axes[0].set_xlabel('X position')
-    axes[0].set_ylabel('Y position')
-    axes[0].set_title('Trajectory in XY plane')
-    axes[0].legend()
-    axes[0].grid(True)
+    axes[0, 0].plot(true_trajectory[:, 0], true_trajectory[:, 1], 'b-', linewidth=2, label='Ground Truth')
+    axes[0, 0].plot(pred_trajectory[:, 0], pred_trajectory[:, 1], 'r--', linewidth=2, label='Predicted')
+    axes[0, 0].set_xlabel('X position (m)')
+    axes[0, 0].set_ylabel('Y position (m)')
+    axes[0, 0].set_title('Camera Trajectory - Top View (XY Plane)')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True)
     
-    # Z over time plot
-    axes[1].plot(true_trajectory[:, 2], 'b-', label='Ground Truth Z')
-    axes[1].plot(pred_trajectory[:, 2], 'r--', label='Predicted Z')
-    axes[1].set_xlabel('Time steps')
-    axes[1].set_ylabel('Z position')
-    axes[1].set_title('Z position over time')
-    axes[1].legend()
-    axes[1].grid(True)
+    # XZ plot (side view)
+    axes[0, 1].plot(true_trajectory[:, 0], true_trajectory[:, 2], 'b-', linewidth=2, label='Ground Truth')
+    axes[0, 1].plot(pred_trajectory[:, 0], pred_trajectory[:, 2], 'r--', linewidth=2, label='Predicted')
+    axes[0, 1].set_xlabel('X position (m)')
+    axes[0, 1].set_ylabel('Z position (m)')
+    axes[0, 1].set_title('Camera Trajectory - Side View (XZ Plane)')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True)
+    
+    # Position error over time
+    axes[1, 0].plot(pos_error, 'g-', linewidth=2)
+    axes[1, 0].set_xlabel('Time step')
+    axes[1, 0].set_ylabel('Position error (m)')
+    axes[1, 0].set_title(f'Position Error Over Time (Mean: {mean_pos_error:.4f} m)')
+    axes[1, 0].grid(True)
+    
+    # Yaw error over time
+    axes[1, 1].plot(yaw_error, 'm-', linewidth=2)
+    axes[1, 1].set_xlabel('Time step')
+    axes[1, 1].set_ylabel('Yaw error (rad)')
+    axes[1, 1].set_title(f'Yaw Error Over Time (Mean: {mean_yaw_error:.4f} rad)')
+    axes[1, 1].grid(True)
     
     plt.tight_layout()
     
+    # Add overall title
+    fig.suptitle('Camera 4 Trajectory Prediction Results', fontsize=16, y=1.02)
+    
     if plot_save_path:
-        plt.savefig(plot_save_path)
+        plt.savefig(plot_save_path, bbox_inches='tight')
+        print(f"Saved trajectory plot to {plot_save_path}")
     else:
         plt.show()
     
-    return true_trajectory, pred_trajectory
+    # Print summary statistics
+    print(f"\nTrajectory Prediction Results:")
+    print(f"Total trajectory points: {len(true_trajectory)}")
+    print(f"Mean position error: {mean_pos_error:.4f} m")
+    print(f"Mean yaw error: {mean_yaw_error:.4f} rad")
+    print(f"Final position error: {pos_error[-1]:.4f} m")
+    
+    return true_trajectory, pred_trajectory, pos_error, yaw_error
+
 
 def main():
-    # ... (existing code)
     parser = argparse.ArgumentParser(description='Train FlowNet-based pose estimator model')
     parser.add_argument('--data', required=True, help='Path to the image_pairs_with_gt.csv file')
     parser.add_argument('--root_dir', help='Root directory for image pairs (if not specified in CSV)')
@@ -425,18 +536,32 @@ def main():
                         help='Mode: train, test, or predict')
     parser.add_argument('--model_path', help='Path to a saved model (for test and predict modes)')
     parser.add_argument('--plot_path', help='Path to save the trajectory plot')
+    parser.add_argument('--train_cameras', default='0,1,2,3', help='Comma-separated list of camera IDs for training')
+    parser.add_argument('--test_cameras', default='4', help='Comma-separated list of camera IDs for testing')
     
     args = parser.parse_args()
     
+    # Parse camera IDs
+    train_cameras = [int(x) for x in args.train_cameras.split(',')]
+    test_cameras = [int(x) for x in args.test_cameras.split(',')]
+    
     if args.mode == 'train':
-        print("Loading dataset...")
-        X_train, X_val, y_train, y_val = load_dataset(
-            args.data, root_dir=args.root_dir, batch_size=args.batch_size
+        print("Loading dataset by camera...")
+        X_train, X_val, X_test, y_train, y_val, y_test, output_dim = load_dataset_by_camera(
+        args.data, 
+        train_cameras=train_cameras,
+        test_cameras=test_cameras,
+        root_dir=args.root_dir
         )
-        
+        print("\n=== Debug: First 5 training samples ===")
+        print(f"X_train[0]: {X_train[0]}")  # Should show image paths
+        print(f"y_train[0]: {y_train[0]}")  # Should show [delta_x, delta_y, delta_z, delta_yaw]
+        print("\n=== Data Shapes ===")
+        print(f"X_train length: {len(X_train)}")
+        print(f"y_train length: {len(y_train)}")
+                
         print("Building model...")
-        # Create the combined model directly
-        combined_model = build_simplified_flownet()
+        combined_model = build_simplified_flownet(output_dim=output_dim)
         
         # Compile the model
         combined_model.compile(
@@ -454,15 +579,45 @@ def main():
         # Print model summary
         combined_model.summary()
         
+        print("\n=== MODEL VERIFICATION ===")
+        combined_model.summary()  # Use the correct variable name
+        try:
+            test_pred = combined_model.predict(np.zeros((1,256,256,6)))
+            print("Test prediction succeeded:", test_pred)
+        except Exception as e:
+            print("MODEL PREDICTION FAILED:", str(e))
         print("Training model...")
-        # ... (rest of the existing code)
+
+        print("\n=== FINAL VERIFICATION ===")
+        print(f"X_train length: {len(X_train)}")
+        print(f"First image paths: {X_train[0]}")
+        print(f"First label: {y_train[0]}")
+        print("Attempting to load sample image...")
+        sample_img = cv2.imread(X_train[0][0])
+        print(f"Image loaded: {sample_img is not None}")
+
         combined_model, history = train_model(
             combined_model, X_train, X_val, y_train, y_val,
             batch_size=args.batch_size, epochs=args.epochs,
             model_save_path=args.model_dir
         )
         
+        # Save test data for later
+        test_data = {
+            'X_test': X_test,
+            'y_test': y_test
+        }
+        np.save(os.path.join(args.model_dir, 'test_data.npy'), test_data, allow_pickle=True)
+        
         print(f"Model training complete. Model saved to {args.model_dir}")
+        
+        # Optional: immediately test on the holdout camera
+        print("\nTesting on holdout camera data...")
+        plot_path = args.plot_path or os.path.join(args.model_dir, 'camera_trajectory.png')
+        true_traj, pred_traj, _, _ = predict_camera_trajectory(
+            combined_model, X_test, y_test, 
+            plot_save_path=plot_path
+        )
         
     elif args.mode == 'test':
         if not args.model_path:
@@ -472,11 +627,23 @@ def main():
         model = load_model(args.model_path)
         
         print("Loading test dataset...")
-        X_test, _, y_test, _ = load_dataset(
-            args.data, root_dir=args.root_dir, batch_size=args.batch_size
-        )
+        try:
+            # Try to load saved test data
+            test_data = np.load(os.path.join(os.path.dirname(args.model_path), 'test_data.npy'), 
+                              allow_pickle=True).item()
+            X_test = test_data['X_test']
+            y_test = test_data['y_test']
+            print(f"Loaded {len(X_test)} test samples from saved data")
+        except:
+            # Otherwise load from CSV
+            _, _, X_test, _, _, y_test = load_dataset_by_camera(
+                args.data, 
+                train_cameras=train_cameras,
+                test_cameras=test_cameras,
+                root_dir=args.root_dir
+            )
         
-        print("Evaluating model...")
+        print("Evaluating model on camera 4...")
         y_pred, mse, rmse, mae = evaluate_model(model, X_test, y_test, batch_size=args.batch_size)
         
     elif args.mode == 'predict':
@@ -487,19 +654,32 @@ def main():
         model = load_model(args.model_path)
         
         print("Loading test dataset...")
-        X_test, _, y_test, _ = load_dataset(
-            args.data, root_dir=args.root_dir, batch_size=args.batch_size
-        )
+        try:
+            # Try to load saved test data
+            test_data = np.load(os.path.join(os.path.dirname(args.model_path), 'test_data.npy'), 
+                              allow_pickle=True).item()
+            X_test = test_data['X_test']
+            y_test = test_data['y_test']
+            print(f"Loaded {len(X_test)} test samples from saved data")
+        except:
+            # Otherwise load from CSV
+            _, _, X_test, _, _, y_test = load_dataset_by_camera(
+                args.data, 
+                train_cameras=train_cameras,
+                test_cameras=test_cameras,
+                root_dir=args.root_dir
+            )
         
         # Assume the starting position is [0, 0, 0, 0] for [x, y, z, yaw]
         start_pos = [0, 0, 0, 0]
         
-        print("Predicting trajectory...")
-        true_traj, pred_traj = predict_trajectory(
-            model, start_pos, X_test, plot_save_path=args.plot_path
+        print("Predicting camera 4 trajectory...")
+        plot_path = args.plot_path or os.path.join(os.path.dirname(args.model_path), 'camera_trajectory.png')
+        true_traj, pred_traj, pos_error, yaw_error = predict_camera_trajectory(
+            model, X_test, y_test, start_pos, plot_save_path=plot_path
         )
         
         print("Trajectory prediction complete.")
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     main()
