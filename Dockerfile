@@ -15,6 +15,9 @@ RUN pip3 install \
     numpy==1.23.5 \
     pandas==1.5.3 \
     matplotlib \
+    tensorflow==2.10.0 \
+    scikit-learn \
+    tqdm \
     pyquaternion
 
 # Create directories for project

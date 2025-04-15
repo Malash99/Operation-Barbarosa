@@ -1,3 +1,13 @@
 *.bag
 ariel_2023-12-21-14-26-32_2.bag
 /output/image_pairs/
+/output/*.csv
+/output/*.png
+*.png
+/output/*.txt
+/output/*.json
+*.json
+output/image_pairs
+/output/image_pairs_cam0
+/output/image_pairs_cam1
+/output/image_pairs_cam2
