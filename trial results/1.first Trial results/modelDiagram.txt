@@ -1,0 +1,23 @@
+INPUT: Image Pair (256x256x6)
+    |
+    ▼
+[Shared Encoder]
+    |                   
+    ▼                   
+[Shared Features]       
+    |                   
+    ├──────────┬──────────┐
+    ▼          ▼          ▼
+[Flow Decoder] [Pose Regressor]
+    |          |
+    ▼          ▼
+Optical Flow  Pose Parameters
+(32x32x2)     (4 or 6 values)
+
+
+In this architecture:
+
+The encoder processes the 6-channel input (RGB pairs)
+Features are shared between flow and pose tasks
+Flow prediction is an auxiliary task that helps with feature learning
+Pose is predicted from the same feature space as flow

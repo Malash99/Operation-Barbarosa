@@ -1,0 +1,43 @@
+Two-Stage Training                      End-to-End Training
+                          -----------------                      -------------------
+
+INPUT: Image Pair                                             INPUT: Image Pair  
+(256x256x6)                                                   (256x256x6)
+    |                                                              |
+    ▼                                                              ▼
+[FlowNet]             Stage 1: Train with                     [FlowNet]
+    |                 dummy/target flows                           |
+    ▼                                                              ▼
+Optical Flow                                                  Optical Flow
+(64x64x2)                                                     (64x64x2)
+    |                                                              |
+    ▼                 Stage 2: Train with                          ▼
+[Pose Network]        pre-computed flows                     [Pose Network]
+    |                                                              |
+    ▼                                                              ▼
+Motion Parameters                                            Motion Parameters
+(4 or 6 values)                                              (4 or 6 values)
+
+
+
+
+In this architecture:
+
+FlowNet:
+
+Takes the 6-channel input (stacked RGB pairs)
+Processes through encoder-decoder to generate optical flow field
+Flow field is a complete visual representation of motion
+
+
+Pose Network:
+
+Takes the optical flow field as input (not shared features)
+Processes through convolutional + dense layers
+Outputs motion parameters (delta_x, delta_y, delta_z, delta_yaw, [delta_pitch, delta_roll])
+
+
+Training Options:
+
+Two-stage: Train FlowNet first, then freeze it and train Pose Network
+End-to-end: Train both networks together but maintain the explicit flow representation

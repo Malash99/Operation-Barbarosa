@@ -1,0 +1,5 @@
+after making the data in the output and generating the pairs and so on
+
+
+# Inside Docker container
+python3 /app/scripts/flownet_2_pose_estimator.py --data /app/output/all_cameras_with_gt.csv --root_dir /app/output --model_dir /app/output/models_flownet2pose --mode train --train_method two-stage --batch_size 8 --epochs 50 --train_cameras 0 --test_cameras 1
