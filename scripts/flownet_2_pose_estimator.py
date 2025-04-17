@@ -22,6 +22,7 @@ if len(physical_devices) > 0:
     print("Using GPU for training")
 else:
     print("No GPU found. Using CPU for training")
+    
 
 def build_flownet_model(input_shape=(256, 256, 6)):
     """
