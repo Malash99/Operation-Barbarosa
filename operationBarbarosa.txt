@@ -1,0 +1,137 @@
+## Operation Barbarosa - Running Commands
+
+docker run -it --rm -v "C:/Users/Admin/Desktop/research/second trial/data:/app/data" -v "C:/Users/Admin/Desktop/research/second trial/output:/app/output" -v "C:/Users/Admin/Desktop/research/second trial/operationBarbarosa:/app/operationBarbarosa" ros-trajectory-analysis bash
+
+
+# Step 1: Process Trajectory Data
+python3 /app/operationBarbarosa/traj_reader.py \
+  --input /app/data/qualisys_ariel_odom_traj_8_id6.tum \
+  --output /app/output/processed_trajectory.csv \
+  --plot /app/output/plots/trajectory_plot.png
+
+# Step 2: Extract Image Pairs from ROS Bags
+# For camera 0
+python3 /app/operationBarbarosa/image_pair.py \
+  --bag /app/data/ariel_2023-12-21-14-26-32_2.bag \
+  --output /app/output/image_pairs_cam0 \
+  --topic "/cam0" \
+  --topic "/alphasense_driver_ros/cam0" \
+  --time_diff 0.1
+
+# For camera 1
+python3 /app/operationBarbarosa/image_pair.py \
+  --bag /app/data/ariel_2023-12-21-14-26-32_2.bag \
+  --output /app/output/image_pairs_cam1 \
+  --topic "/cam1" \
+  --topic "/alphasense_driver_ros/cam1" \
+  --time_diff 0.1
+
+# For camera 2
+python3 /app/operationBarbarosa/image_pair.py \
+  --bag /app/data/ariel_2023-12-21-14-26-32_2.bag \
+  --output /app/output/image_pairs_cam2 \
+  --topic "/cam2" \
+  --topic "/alphasense_driver_ros/cam2" \
+  --time_diff 0.1
+
+# For camera 3
+python3 /app/operationBarbarosa/image_pair.py \
+  --bag /app/data/ariel_2023-12-21-14-26-32_2.bag \
+  --output /app/output/image_pairs_cam3 \
+  --topic "/cam3" \
+  --topic "/alphasense_driver_ros/cam3" \
+  --time_diff 0.1
+
+# For camera 4
+python3 /app/operationBarbarosa/image_pair.py \
+  --bag /app/data/ariel_2023-12-21-14-26-32_2.bag \
+  --output /app/output/image_pairs_cam4 \
+  --topic "/cam4" \
+  --topic "/alphasense_driver_ros/cam4" \
+  --time_diff 0.1
+
+# Step 3: Match Image Pairs with Trajectory Data
+python3 /app/operationBarbarosa/pairs_with_trajectory.py \
+  --process_all \
+  --base_dir /app/output \
+  --trajectory /app/output/processed_trajectory.csv \
+  --output_dir /app/output
+
+# Step 4: Analyze Dataset and Visualize Statistics
+python3 /app/operationBarbarosa/data_utils.py \
+  --analyze \
+  --data /app/output/all_cameras_with_gt.csv \
+  --output_dir /app/output/analysis
+
+# Step 5: Train the FlowNet to Pose Model (with meanstd normalization)
+python3 /app/operationBarbarosa/train.py \
+  --data /app/output/all_cameras_with_gt.csv \
+  --model_dir /app/output/models_flownet2pose_meanstd \
+  --batch_size 8 \
+  --epochs 50 \
+  --train_cameras 0,1,2,3 \
+  --test_cameras 4 \
+  --normalize_method meanstd \
+  --loss_type sincos
+
+# Alternative training with no normalization
+python3 /app/operationBarbarosa/train.py \
+  --data /app/output/all_cameras_with_gt.csv \
+  --model_dir /app/output/models_flownet2pose_none \
+  --batch_size 8 \
+  --epochs 50 \
+  --train_cameras 0,1,2,3 \
+  --test_cameras 4 \
+  --normalize_method none \
+  --loss_type sincos
+
+# Alternative training with weighted MSE loss
+python3 /app/operationBarbarosa/train.py \
+  --data /app/output/all_cameras_with_gt.csv \
+  --model_dir /app/output/models_flownet2pose_weighted \
+  --batch_size 8 \
+  --epochs 50 \
+  --train_cameras 0,1,2,3 \
+  --test_cameras 4 \
+  --normalize_method meanstd \
+  --loss_type weighted
+
+# Step 6: Run Trajectory Prediction with the trained model
+python3 /app/operationBarbarosa/predict.py \
+  --model_path /app/output/models_flownet2pose_meanstd/combined_model_final.h5 \
+  --data_dir /app/output \
+  --output_dir /app/output/camera_results_meanstd \
+  --cameras 0,1,2,3,4 \
+  --normalize_method meanstd
+
+# Using alternative model (no normalization)
+python3 /app/operationBarbarosa/predict.py \
+  --model_path /app/output/models_flownet2pose_none/combined_model_final.h5 \
+  --data_dir /app/output \
+  --output_dir /app/output/camera_results_none \
+  --cameras 0,1,2,3,4
+
+# Using alternative model (weighted loss)
+python3 /app/operationBarbarosa/predict.py \
+  --model_path /app/output/models_flownet2pose_weighted/combined_model_final.h5 \
+  --data_dir /app/output \
+  --output_dir /app/output/camera_results_weighted \
+  --cameras 0,1,2,3,4 \
+  --normalize_method meanstd
+
+# Run bash script for the entire pipeline (if you move the run_scripts.sh to the correct location)
+bash /app/operationBarbarosa/run_scripts.sh full
+
+# Running individual steps using the bash script
+bash /app/operationBarbarosa/run_scripts.sh step 1  # Process trajectory data
+bash /app/operationBarbarosa/run_scripts.sh step 2  # Extract image pairs
+bash /app/operationBarbarosa/run_scripts.sh step 3  # Match pairs with trajectory
+bash /app/operationBarbarosa/run_scripts.sh step 4  # Analyze dataset
+bash /app/operationBarbarosa/run_scripts.sh step 5  # Train model
+bash /app/operationBarbarosa/run_scripts.sh step 6  # Predict trajectories
+
+# Custom training with specific parameters
+bash /app/operationBarbarosa/run_scripts.sh train 4 30 "0,1" "2,3,4" "meanstd" "sincos"
+
+# Custom prediction with specific model
+bash /app/operationBarbarosa/run_scripts.sh predict "/app/output/models_flownet2pose_meanstd/combined_model_final.h5" "0,1,2,3,4" "meanstd"
