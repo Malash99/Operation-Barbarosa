@@ -75,6 +75,8 @@ def match_images_with_gt(image_pairs_dir, trajectory_csv, output_csv=None):
                 'delta_y': gt_data['delta_y'] if not np.isnan(gt_data['delta_y']) else 0.0,
                 'delta_z': gt_data['delta_z'] if not np.isnan(gt_data['delta_z']) else 0.0,
                 'delta_yaw': gt_data['delta_yaw'] if not np.isnan(gt_data['delta_yaw']) else 0.0,
+                'delta_roll': gt_data['delta_roll'] if not np.isnan(gt_data['delta_roll']) else 0.0,
+                'delta_pitch': gt_data['delta_pitch'] if not np.isnan(gt_data['delta_pitch']) else 0.0,
                 'yaw': gt_data['yaw'],
                 'pitch': gt_data['pitch'],
                 'roll': gt_data['roll'],

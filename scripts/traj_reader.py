@@ -39,6 +39,8 @@ def process_tum_file(file_path, output_path=None):
     result['delta_y'] = result['y'].diff()
     result['delta_z'] = result['z'].diff()
     result['delta_yaw'] = result['yaw'].diff()
+    result['delta_pitch'] = result['pitch'].diff()
+    result['delta_roll'] = result['roll'].diff()
     
     if output_path:
         # Create directory if it doesn't exist

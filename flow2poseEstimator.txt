@@ -1,5 +1,16 @@
 after making the data in the output and generating the pairs and so on
-
-
+/////////////////////////////////////////////////////////////////////////////////////
+build the image
+docker build -t ros-trajectory-analysis .
+/////////////////////////////////////////////////////////////////////////////////////
+run the container 
+docker run -it --rm -v "${PWD}\data:/app/data" -v "${PWD}\output:/app/output" -v "${PWD}\scripts:/app/scripts" ros-trajectory-analysis bash 
+/////////////////////////////////////////////////////////////////////////////////////
 # Inside Docker container
 python3 /app/scripts/flownet_2_pose_estimator.py --data /app/output/all_cameras_with_gt.csv --root_dir /app/output --model_dir /app/output/models_flownet2pose --mode train --train_method two-stage --batch_size 8 --epochs 50 --train_cameras 0 --test_cameras 1
+/////////////////////////////////////////////////////////////////////////////////////
+
+
+to test on other cameras
+chmod +x /app/scripts/predict_all_cameras.py // lesa mesh 3aref de betshghl wla la2
+python3 /app/scripts/predict_scaled_trajectories.py --model_path /app/output/models_flownet2pose2/combined_model_final.h5 --data_dir /app/output --output_dir /app/output/camera_test_results --cameras 1,2,3,4

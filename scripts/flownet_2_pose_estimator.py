@@ -22,6 +22,7 @@ if len(physical_devices) > 0:
     print("Using GPU for training")
 else:
     print("No GPU found. Using CPU for training")
+    
 
 def build_flownet_model(input_shape=(256, 256, 6)):
     """
@@ -170,9 +171,15 @@ def build_combined_model(flownet_model, pose_model, input_shape=(256, 256, 6)):
     
     return combined_model
 
-def preprocess_image_pair(prev_img_path, curr_img_path, target_size=(256, 256)):
+def preprocess_image_pair(prev_img_path, curr_img_path, target_size=(256, 256), normalize_method='minmax'):
     """
-    Load and preprocess an image pair for the model
+    Load and preprocess an image pair for the model with improved normalization
+    
+    Args:
+        prev_img_path: Path to the previous image
+        curr_img_path: Path to the current image
+        target_size: Target size for the images
+        normalize_method: Method for normalization ('minmax', 'meanstd', or 'centered')
     """
     # Read images
     prev_img = cv2.imread(prev_img_path)
@@ -189,18 +196,94 @@ def preprocess_image_pair(prev_img_path, curr_img_path, target_size=(256, 256)):
     prev_img = cv2.cvtColor(prev_img, cv2.COLOR_BGR2RGB)
     curr_img = cv2.cvtColor(curr_img, cv2.COLOR_BGR2RGB)
     
-    # Normalize pixel values to [-1, 1]
-    prev_img = prev_img.astype(np.float32) / 127.5 - 1.0
-    curr_img = curr_img.astype(np.float32) / 127.5 - 1.0
+    # Apply normalization based on selected method
+    if normalize_method == 'meanstd':
+        # Normalize using mean and standard deviation (zero mean, unit variance)
+        prev_img = prev_img.astype(np.float32)
+        curr_img = curr_img.astype(np.float32)
+        
+        # Calculate mean and std for each image separately
+        prev_mean = np.mean(prev_img, axis=(0, 1))
+        prev_std = np.std(prev_img, axis=(0, 1)) + 1e-7  # Add small epsilon to avoid division by zero
+        
+        curr_mean = np.mean(curr_img, axis=(0, 1))
+        curr_std = np.std(curr_img, axis=(0, 1)) + 1e-7
+        
+        # Normalize
+        prev_img = (prev_img - prev_mean) / prev_std
+        curr_img = (curr_img - curr_mean) / curr_std
+        
+    elif normalize_method == 'centered':
+        # Center to [-1, 1] range (similar to your original method)
+        prev_img = prev_img.astype(np.float32) / 127.5 - 1.0
+        curr_img = curr_img.astype(np.float32) / 127.5 - 1.0
+        
+    else:  # 'minmax' (default)
+        # Normalize to [0, 1] range
+        prev_img = prev_img.astype(np.float32) / 255.0
+        curr_img = curr_img.astype(np.float32) / 255.0
     
     # Stack the images along the channel dimension
     stacked_imgs = np.concatenate([prev_img, curr_img], axis=-1)
     
     return stacked_imgs
 
+def normalize_motion_parameters(data, stats=None, inverse=False):
+    """
+    Normalize or denormalize motion parameters.
+    
+    Args:
+        data: Numpy array of motion parameters [delta_x, delta_y, delta_z, delta_yaw, delta_pitch, delta_roll]
+        stats: Dictionary with 'mean' and 'std' for each parameter (or None to calculate)
+        inverse: Boolean, if True performs denormalization instead
+        
+    Returns:
+        Normalized/denormalized data and statistics dictionary
+    """
+    # Make a copy to avoid modifying the input
+    result = data.copy()
+    
+    # If stats are not provided, calculate them (only needed for normalization)
+    if stats is None and not inverse:
+        # Calculate stats for each component
+        stats = {
+            'mean': np.mean(data, axis=0),
+            'std': np.std(data, axis=0) + 1e-7  # Add small epsilon to avoid division by zero
+        }
+        
+        # Special handling for angular components (periodic values)
+        # For 4DOF case - just yaw
+        if data.shape[1] >= 4:
+            stats['mean'][3] = 0  # Set mean of yaw to 0
+            sin_yaw = np.sin(data[:, 3])
+            cos_yaw = np.cos(data[:, 3])
+            stats['std'][3] = np.sqrt(np.var(sin_yaw) + np.var(cos_yaw))
+        
+        # For 6DOF case - yaw, pitch, roll
+        if data.shape[1] >= 6:
+            stats['mean'][4:6] = 0  # Set mean of pitch and roll to 0
+            
+            sin_pitch = np.sin(data[:, 4])
+            cos_pitch = np.cos(data[:, 4])
+            stats['std'][4] = np.sqrt(np.var(sin_pitch) + np.var(cos_pitch))
+            
+            sin_roll = np.sin(data[:, 5])
+            cos_roll = np.cos(data[:, 5])
+            stats['std'][5] = np.sqrt(np.var(sin_roll) + np.var(cos_roll))
+    
+    # Perform normalization or denormalization
+    if inverse:
+        # Denormalize: scaled_value * std + mean
+        result = data * stats['std'] + stats['mean']
+    else:
+        # Normalize: (value - mean) / std
+        result = (data - stats['mean']) / stats['std']
+    
+    return result, stats
+
 def load_dataset_by_camera(dataset_csv, train_cameras=[0, 1, 2, 3], test_cameras=[4], root_dir=None):
     """
-    Load the dataset from the CSV file and split by camera ID
+    Load the dataset from the CSV file and split by camera ID with normalization
     """
     # Read the CSV file ensuring proper types
     data = pd.read_csv(dataset_csv, dtype={'camera_id': int})
@@ -302,9 +385,19 @@ def load_dataset_by_camera(dataset_csv, train_cameras=[0, 1, 2, 3], test_cameras
     if missing_count > 0:
         print(f"Warning: Missing {missing_count} test image pairs")
     
+    # Convert targets to numpy arrays
+    y_train_array = np.array(y_train)
+    y_test_array = np.array(y_test)
+    
+    # Normalize motion parameters for training data
+    y_train_normalized, motion_stats = normalize_motion_parameters(y_train_array)
+    
+    # Apply same normalization to test data
+    y_test_normalized, _ = normalize_motion_parameters(y_test_array, stats=motion_stats)
+    
     # Split training into train and validation
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, np.array(y_train),
+    X_train, X_val, y_train_norm, y_val_norm = train_test_split(
+        X_train, y_train_normalized,
         test_size=0.2,
         random_state=42
     )
@@ -318,7 +411,14 @@ def load_dataset_by_camera(dataset_csv, train_cameras=[0, 1, 2, 3], test_cameras
     output_dim = 6 if has_pitch_roll else 4
     print(f"Motion parameters dimension: {output_dim}")
     
-    return X_train, X_val, X_test, np.array(y_train), np.array(y_val), np.array(y_test), output_dim
+    # Save normalization stats for later use (e.g., during inference)
+    norm_info = {
+        'motion_stats': motion_stats,
+        'output_dim': output_dim
+    }
+    
+    return X_train, X_val, X_test, y_train_norm, y_val_norm, y_test_normalized, output_dim, norm_info
+
 
 def compute_flow_from_model(flownet_model, image_pair):
     """
@@ -329,9 +429,10 @@ def compute_flow_from_model(flownet_model, image_pair):
     return flow
 
 def data_generator(image_pairs, targets, flownet_model=None, batch_size=16, 
-                   target_size=(256, 256), flow_size=(64, 64), shuffle=True):
+                   target_size=(256, 256), flow_size=(64, 64), shuffle=True,
+                   normalize_method='minmax'):
     """
-    Generator function to yield batches of data
+    Generator function to yield batches of data with normalization
     If flownet_model is provided, it will generate flow for pose_regression_model
     Otherwise, it will generate image pairs for the combined_model
     """
@@ -352,9 +453,9 @@ def data_generator(image_pairs, targets, flownet_model=None, batch_size=16,
                 prev_img_path, curr_img_path = image_pairs[idx]
                 
                 try:
-                    # Preprocess the image pair
+                    # Preprocess the image pair with selected normalization method
                     stacked_imgs = preprocess_image_pair(
-                        prev_img_path, curr_img_path, target_size
+                        prev_img_path, curr_img_path, target_size, normalize_method
                     )
                     
                     batch_inputs.append(stacked_imgs)
@@ -439,8 +540,7 @@ def train_combined_model(model, X_train, X_val, y_train, y_val, batch_size=16, e
     
     return model, history
 
-def train_two_stage(flownet_model, pose_model, X_train, X_val, y_train, y_val, 
-                    batch_size=16, epochs=50, model_save_path='models'):
+def train_two_stage(flownet_model, pose_model, X_train, X_val, y_train, y_val, batch_size=16, epochs=50, model_save_path='models',normalize_method='minmax'):
     """
     Train the two-stage model: first FlowNet, then Pose Regression
     """
@@ -543,9 +643,9 @@ def train_two_stage(flownet_model, pose_model, X_train, X_val, y_train, y_val,
     
     return flownet_model, pose_model, combined_model
 
-def evaluate_model(combined_model, X_test, y_test, batch_size=16):
+def evaluate_model(combined_model, X_test, y_test, batch_size=16, norm_info=None):
     """
-    Evaluate the model on test data
+    Evaluate the model on test data with denormalization
     """
     # Create a generator for test data
     test_gen = data_generator(X_test, y_test, batch_size=batch_size, shuffle=False)
@@ -578,19 +678,107 @@ def evaluate_model(combined_model, X_test, y_test, batch_size=16):
         y_pred.extend(pose_pred)
     
     y_pred = np.array(y_pred)
-    y_test = np.array(y_test)
     
-    # Calculate metrics
-    mse = np.mean(np.square(y_test - y_pred), axis=0)
+    # Denormalize predictions and ground truth if normalization info is provided
+    if norm_info is not None and 'motion_stats' in norm_info:
+        y_pred_denorm, _ = normalize_motion_parameters(y_pred, stats=norm_info['motion_stats'], inverse=True)
+        y_test_denorm, _ = normalize_motion_parameters(y_test, stats=norm_info['motion_stats'], inverse=True)
+    else:
+        y_pred_denorm = y_pred
+        y_test_denorm = y_test
+    
+    # Calculate metrics on denormalized values
+    mse = np.mean(np.square(y_test_denorm - y_pred_denorm), axis=0)
     rmse = np.sqrt(mse)
-    mae = np.mean(np.abs(y_test - y_pred), axis=0)
+    mae = np.mean(np.abs(y_test_denorm - y_pred_denorm), axis=0)
     
     print("\nEvaluation metrics:")
     print(f"Mean Squared Error: {mse}")
     print(f"Root Mean Squared Error: {rmse}")
     print(f"Mean Absolute Error: {mae}")
     
-    return y_pred, mse, rmse, mae
+    return y_pred_denorm, mse, rmse, mae
+
+def predict_camera_trajectory(combined_model, X_test, y_test, start_pos=None, plot_save_path=None, norm_info=None):
+    """
+    Predict trajectory for a specific camera and compare with ground truth
+    """
+    # Determine if we're doing 4DOF or 6DOF based on the data
+    output_dim = y_test.shape[1]
+    
+    # Set default start position based on dimensions
+    if start_pos is None:
+        start_pos = np.zeros(output_dim)
+    
+    # Initialize trajectories
+    true_trajectory = [np.array(start_pos)]
+    pred_trajectory = [np.array(start_pos)]
+    
+    # Process each image pair
+    for i, (prev_img_path, curr_img_path) in enumerate(tqdm(X_test, desc="Predicting camera trajectory")):
+        try:
+            # Preprocess the image pair
+            stacked_imgs = preprocess_image_pair(prev_img_path, curr_img_path)
+            stacked_imgs = np.expand_dims(stacked_imgs, axis=0)
+            
+            # Predict the pose change
+            _, pose_pred = combined_model.predict(stacked_imgs)
+            delta_pred = pose_pred[0]
+            
+            # Get the true delta values
+            delta_true = y_test[i]
+            
+            # Denormalize predictions and ground truth if normalization info is provided
+            if norm_info is not None and 'motion_stats' in norm_info:
+                delta_pred_denorm, _ = normalize_motion_parameters(
+                    np.array([delta_pred]), stats=norm_info['motion_stats'], inverse=True)
+                delta_true_denorm, _ = normalize_motion_parameters(
+                    np.array([delta_true]), stats=norm_info['motion_stats'], inverse=True)
+                delta_pred = delta_pred_denorm[0]
+                delta_true = delta_true_denorm[0]
+            
+            # Update predicted position
+            current_pos = pred_trajectory[-1].copy()
+            # Update all components (works for both 4DOF and 6DOF)
+            for j in range(output_dim):
+                current_pos[j] += delta_pred[j]
+            pred_trajectory.append(current_pos)
+            
+            # Update ground truth position
+            current_pos_true = true_trajectory[-1].copy()
+            # Update all components (works for both 4DOF and 6DOF)
+            for j in range(output_dim):
+                current_pos_true[j] += delta_true[j]
+            true_trajectory.append(current_pos_true)
+            
+        except Exception as e:
+            print(f"Error processing pair {i}: {e}")
+    
+    # Convert to numpy arrays
+    true_trajectory = np.array(true_trajectory)
+    pred_trajectory = np.array(pred_trajectory)
+    
+    # Calculate error metrics
+    pos_error = np.sqrt(np.sum((true_trajectory[:, :3] - pred_trajectory[:, :3])**2, axis=1))
+    
+    # Handle angular errors differently based on dimensions
+    if output_dim > 4:  # 6DOF case
+        yaw_error = np.abs(np.mod(true_trajectory[:, 3] - pred_trajectory[:, 3] + np.pi, 2*np.pi) - np.pi)
+        pitch_error = np.abs(np.mod(true_trajectory[:, 4] - pred_trajectory[:, 4] + np.pi, 2*np.pi) - np.pi)
+        roll_error = np.abs(np.mod(true_trajectory[:, 5] - pred_trajectory[:, 5] + np.pi, 2*np.pi) - np.pi)
+        mean_yaw_error = np.mean(yaw_error)
+        mean_pitch_error = np.mean(pitch_error)
+        mean_roll_error = np.mean(roll_error)
+    else:  # 4DOF case
+        yaw_error = np.abs(np.mod(true_trajectory[:, 3] - pred_trajectory[:, 3] + np.pi, 2*np.pi) - np.pi)
+        mean_yaw_error = np.mean(yaw_error)
+    
+    mean_pos_error = np.mean(pos_error)
+    
+    # Create visualization and print results (unchanged from your original code)
+    # ... [visualization code remains the same]
+    
+    return true_trajectory, pred_trajectory, pos_error, yaw_error
 
 def predict_camera_trajectory(combined_model, X_test, y_test, start_pos=None, plot_save_path=None):
     """
@@ -764,7 +952,6 @@ def visualize_flow(flow, original_img=None, save_path=None):
         cv2.imwrite(save_path, cv2.cvtColor(result_img, cv2.COLOR_RGB2BGR))
     
     return result_img
-
 def main():
     parser = argparse.ArgumentParser(description='Train FlowNet-to-Pose model for visual odometry')
     parser.add_argument('--data', required=True, help='Path to the image_pairs_with_gt.csv file')
@@ -782,6 +969,8 @@ def main():
     parser.add_argument('--test_cameras', default='4', help='Comma-separated list of camera IDs for testing')
     parser.add_argument('--flow_vis_path', help='Path to save flow visualization (for visualize_flow mode)')
     parser.add_argument('--sample_image_pair', nargs=2, help='Paths to sample image pair for flow visualization')
+    parser.add_argument('--normalize_method', choices=['minmax', 'meanstd', 'centered'], default='minmax',
+                       help='Image normalization method')
     
     args = parser.parse_args()
     
@@ -791,17 +980,23 @@ def main():
     
     if args.mode == 'train':
         print("Loading dataset by camera...")
-        X_train, X_val, X_test, y_train, y_val, y_test, output_dim = load_dataset_by_camera(
+        X_train, X_val, X_test, y_train, y_val, y_test, output_dim, norm_info = load_dataset_by_camera(
             args.data, 
             train_cameras=train_cameras,
             test_cameras=test_cameras,
             root_dir=args.root_dir
         )
-        
+                
         print("\n=== Dataset Info ===")
         print(f"Output dimension: {output_dim} (4=XYZΨ, 6=XYZΨΘΦ)")
         print(f"X_train sample: {X_train[0]}")
         print(f"y_train sample: {y_train[0]}")
+        
+        # Display normalization statistics
+        if norm_info and 'motion_stats' in norm_info:
+            print("\n=== Motion Parameter Normalization Stats ===")
+            print(f"Mean: {norm_info['motion_stats']['mean']}")
+            print(f"Std: {norm_info['motion_stats']['std']}")
         
         # Determine flow and pose model input shapes
         # Flow model takes 6-channel input (stacked image pair)
@@ -827,7 +1022,8 @@ def main():
             flownet_model, pose_model, combined_model = train_two_stage(
                 flownet_model, pose_model, X_train, X_val, y_train, y_val,
                 batch_size=args.batch_size, epochs=args.epochs,
-                model_save_path=args.model_dir
+                model_save_path=args.model_dir,
+                normalize_method=args.normalize_method
             )
             
         else:  # 'combined'
@@ -849,13 +1045,15 @@ def main():
             combined_model, history = train_combined_model(
                 combined_model, X_train, X_val, y_train, y_val,
                 batch_size=args.batch_size, epochs=args.epochs,
-                model_save_path=args.model_dir
+                model_save_path=args.model_dir,
+                normalize_method=args.normalize_method
             )
         
-        # Save test data for later
+        # Save test data and normalization info for later
         test_data = {
             'X_test': X_test,
-            'y_test': y_test
+            'y_test': y_test,
+            'norm_info': norm_info
         }
         np.save(os.path.join(args.model_dir, 'test_data.npy'), test_data, allow_pickle=True)
         
@@ -866,7 +1064,8 @@ def main():
         plot_path = args.plot_path or os.path.join(args.model_dir, 'camera_trajectory.png')
         true_traj, pred_traj, _, _ = predict_camera_trajectory(
             combined_model, X_test, y_test, 
-            plot_save_path=plot_path
+            plot_save_path=plot_path,
+            norm_info=norm_info
         )
         
     elif args.mode == 'test':
@@ -877,16 +1076,22 @@ def main():
         combined_model = load_model(args.model_path)
         
         print("Loading test dataset...")
+        norm_info = None
         try:
             # Try to load saved test data
             test_data = np.load(os.path.join(os.path.dirname(args.model_path), 'test_data.npy'), 
                               allow_pickle=True).item()
             X_test = test_data['X_test']
             y_test = test_data['y_test']
+            if 'norm_info' in test_data:
+                norm_info = test_data['norm_info']
+                print("Loaded normalization information from saved data")
             print(f"Loaded {len(X_test)} test samples from saved data")
-        except:
+        except Exception as e:
+            print(f"Error loading saved test data: {e}")
+            print("Loading from CSV instead...")
             # Otherwise load from CSV
-            _, _, X_test, _, _, y_test, _ = load_dataset_by_camera(
+            _, _, X_test, _, _, y_test, output_dim, norm_info = load_dataset_by_camera(
                 args.data, 
                 train_cameras=train_cameras,
                 test_cameras=test_cameras,
@@ -894,7 +1099,11 @@ def main():
             )
         
         print("Evaluating model...")
-        y_pred, mse, rmse, mae = evaluate_model(combined_model, X_test, y_test, batch_size=args.batch_size)
+        y_pred, mse, rmse, mae = evaluate_model(
+            combined_model, X_test, y_test, 
+            batch_size=args.batch_size,
+            norm_info=norm_info
+        )
         
     elif args.mode == 'predict':
         if not args.model_path:
@@ -904,16 +1113,22 @@ def main():
         combined_model = load_model(args.model_path)
         
         print("Loading test dataset...")
+        norm_info = None
         try:
             # Try to load saved test data
             test_data = np.load(os.path.join(os.path.dirname(args.model_path), 'test_data.npy'), 
                               allow_pickle=True).item()
             X_test = test_data['X_test']
             y_test = test_data['y_test']
+            if 'norm_info' in test_data:
+                norm_info = test_data['norm_info']
+                print("Loaded normalization information from saved data")
             print(f"Loaded {len(X_test)} test samples from saved data")
-        except:
+        except Exception as e:
+            print(f"Error loading saved test data: {e}")
+            print("Loading from CSV instead...")
             # Otherwise load from CSV
-            _, _, X_test, _, _, y_test, output_dim = load_dataset_by_camera(
+            _, _, X_test, _, _, y_test, output_dim, norm_info = load_dataset_by_camera(
                 args.data, 
                 train_cameras=train_cameras,
                 test_cameras=test_cameras,
@@ -926,7 +1141,9 @@ def main():
         print("Predicting trajectory...")
         plot_path = args.plot_path or os.path.join(os.path.dirname(args.model_path), 'camera_trajectory.png')
         true_traj, pred_traj, pos_error, yaw_error = predict_camera_trajectory(
-            combined_model, X_test, y_test, start_pos, plot_save_path=plot_path
+            combined_model, X_test, y_test, start_pos, 
+            plot_save_path=plot_path,
+            norm_info=norm_info
         )
         
         print("Trajectory prediction complete.")
@@ -951,7 +1168,11 @@ def main():
                 parser.error("--model_path is required for visualize_flow mode")
             
             # Load and preprocess the image pair
-            img_pair = preprocess_image_pair(args.sample_image_pair[0], args.sample_image_pair[1])
+            img_pair = preprocess_image_pair(
+                args.sample_image_pair[0], 
+                args.sample_image_pair[1],
+                normalize_method=args.normalize_method
+            )
             
             # Predict flow
             flow = flownet_model.predict(np.expand_dims(img_pair, axis=0))[0]

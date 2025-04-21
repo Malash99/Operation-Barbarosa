@@ -1,0 +1,95 @@
+Step 1: Process Trajectory Data
+bash
+python3 /app/scripts/traj_reader.py \
+  --input /app/data/qualisys_ariel_odom_traj_8_id6.tum \
+  --output /app/output/processed_trajectory.csv \
+  --plot /app/output/plots/trajectory_plot.png
+Step 2: Extract Image Pairs from ROS Bags
+bash# For camera 0
+# Option 1: Using comma-separated values
+# Option 2: Using multiple flags
+python3 /app/scripts/image_pair.py --bag /app/data/ariel_2023-12-21-14-26-32_2.bag --output /app/output/image_pairs_cam0 --topic "/cam0" --topic "/alphasense_driver_ros/cam0" --time_diff 0.1
+
+# For camera 1
+# Option 1: Using comma-separated values
+# Option 2: Using multiple flags
+python3 /app/scripts/image_pair.py --bag /app/data/ariel_2023-12-21-14-26-32_2.bag --output /app/output/image_pairs_cam1 --topic "/cam1" --topic "/alphasense_driver_ros/cam1" --time_diff 0.1
+
+# For camera 2
+# Option 1: Using comma-separated values
+# Option 2: Using multiple flags
+python3 /app/scripts/image_pair.py --bag /app/data/ariel_2023-12-21-14-26-32_2.bag --output /app/output/image_pairs_cam2 --topic "/cam2" --topic "/alphasense_driver_ros/cam2" --time_diff 0.1
+
+# For camera 3
+# Option 1: Using comma-separated values
+# Option 2: Using multiple flags
+python3 /app/scripts/image_pair.py --bag /app/data/ariel_2023-12-21-14-26-32_2.bag --output /app/output/image_pairs_cam3 --topic "/cam3" --topic "/alphasense_driver_ros/cam3" --time_diff 0.1
+
+# For camera 4
+# Option 1: Using comma-separated values
+# Option 2: Using multiple flags
+python3 /app/scripts/image_pair.py --bag /app/data/ariel_2023-12-21-14-26-32_2.bag --output /app/output/image_pairs_cam4 --topic "/cam4" --topic "/alphasense_driver_ros/cam4" --time_diff 0.1
+
+Step 3: Match Image Pairs with Trajectory Data
+bash# Process all cameras at once
+python3 /app/scripts/pairs_with_trajectory.py \
+  --process_all \
+  --base_dir /app/output \
+  --trajectory /app/output/processed_trajectory.csv \
+  --output_dir /app/output
+
+# Or process each camera individually
+python3 /app/scripts/pairs_with_trajectory.py \
+  --pairs /app/output/image_pairs_cam0 \
+  --trajectory /app/output/processed_trajectory.csv \
+  --output /app/output/image_pairs_cam0_gt.csv
+
+python3 /app/scripts/pairs_with_trajectory.py \
+  --pairs /app/output/image_pairs_cam1 \
+  --trajectory /app/output/processed_trajectory.csv \
+  --output /app/output/image_pairs_cam1_gt.csv
+
+
+// old model
+Step 4: Train the FlowNet to Pose Model
+bash
+python3 /app/scripts/flownet_2_pose_estimator.py \
+  --data /app/output/all_cameras_with_gt.csv \
+  --model_dir /app/output/models_flownet2pose \
+  --batch_size 8 \
+  --epochs 50 \
+  --train_method two-stage \
+  --train_cameras 0,1,2,3 \
+  --test_cameras 4
+
+
+how to learn with th enormalozation 
+
+python3 /app/scripts/flownet_2_pose_estimator.py \
+  --data /app/output/all_cameras_with_gt.csv \
+  --model_dir /app/output/models_flownet2pose2 \
+  --batch_size 4 \
+  --epochs 50 \
+  --train_method two-stage \
+  --train_cameras 0 \
+  --test_cameras 4 \
+  --normalize_method meanstd
+
+
+Step 5: Run Scale-Corrected Trajectory Prediction
+bashpython3 /app/scripts/predict_scaled_trajectories.py \
+  --model_path /app/output/models_flownet2pose/combined_model_final.h5 \
+  --data_dir /app/output \
+  --output_dir /app/output/camera_test_results \
+  --cameras 1,2,3,4
+
+
+
+
+
+  python3 /app/scripts/predict_scaled_trajectories.py \
+  --model_path /app/output/models_flownet2pose2/combined_model_final.h5 \
+  --data_dir /app/output \
+  --output_dir /app/output/camera_norm_results_trial_2 \
+  --cameras 0,1,2,3,4 \
+  --normalize_method meanstd
