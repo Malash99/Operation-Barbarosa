@@ -62,55 +62,56 @@ def data_generator(df, batch_size=8, target_size=(256, 256), normalizer=None, sh
     Yields:
         Batches of (image_pairs, pose_changes)
     """
-    indices = np.arange(len(df))
-    if shuffle:
-        np.random.shuffle(indices)
-    
-    num_batches = int(np.ceil(len(df) / batch_size))
-    
-    for batch_idx in range(num_batches):
-        start_idx = batch_idx * batch_size
-        end_idx = min((batch_idx + 1) * batch_size, len(df))
-        batch_indices = indices[start_idx:end_idx]
+    while True:  # This makes the generator repeat infinitely
+        indices = np.arange(len(df))
+        if shuffle:
+            np.random.shuffle(indices)
         
-        # Initialize batch arrays
-        batch_x = np.zeros((len(batch_indices), target_size[0], target_size[1], 6))
-        batch_y = np.zeros((len(batch_indices), 6))
+        num_batches = int(np.ceil(len(df) / batch_size))
         
-        for i, idx in enumerate(batch_indices):
-            row = df.iloc[idx]
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min((batch_idx + 1) * batch_size, len(df))
+            batch_indices = indices[start_idx:end_idx]
             
-            # Get paths for previous and current images
-            pair_path = row['image_pair_path']
-            prev_img_path = os.path.join(pair_path, 'prev.png')
-            curr_img_path = os.path.join(pair_path, 'curr.png')
+            # Initialize batch arrays
+            batch_x = np.zeros((len(batch_indices), target_size[0], target_size[1], 6))
+            batch_y = np.zeros((len(batch_indices), 6))
             
-            # Load image pair
-            try:
-                stacked_img = load_image_pair(prev_img_path, curr_img_path, target_size)
-                batch_x[i] = stacked_img
-            except Exception as e:
-                print(f"Error loading images from {pair_path}: {e}")
-                # Use zeros for this sample
-                batch_x[i] = np.zeros((target_size[0], target_size[1], 6))
+            for i, idx in enumerate(batch_indices):
+                row = df.iloc[idx]
+                
+                # Get paths for previous and current images
+                pair_path = row['image_pair_path']
+                prev_img_path = os.path.join(pair_path, 'prev.png')
+                curr_img_path = os.path.join(pair_path, 'current.png')  # Using 'current.png' instead of 'curr.png'
+                
+                # Load image pair
+                try:
+                    stacked_img = load_image_pair(prev_img_path, curr_img_path, target_size)
+                    batch_x[i] = stacked_img
+                except Exception as e:
+                    print(f"Error loading images from {pair_path}: {e}")
+                    # Use zeros for this sample
+                    batch_x[i] = np.zeros((target_size[0], target_size[1], 6))
+                
+                # Get pose changes
+                pose_changes = np.array([
+                    row['delta_x'],
+                    row['delta_y'],
+                    row['delta_z'],
+                    row['delta_yaw'],
+                    row['delta_roll'],
+                    row['delta_pitch']
+                ])
+                
+                batch_y[i] = pose_changes
             
-            # Get pose changes
-            pose_changes = np.array([
-                row['delta_x'],
-                row['delta_y'],
-                row['delta_z'],
-                row['delta_yaw'],
-                row['delta_roll'],
-                row['delta_pitch']
-            ])
+            # Normalize pose data if normalizer is provided
+            if normalizer is not None:
+                batch_y = normalizer.normalize(batch_y)
             
-            batch_y[i] = pose_changes
-        
-        # Normalize pose data if normalizer is provided
-        if normalizer is not None:
-            batch_y = normalizer.normalize(batch_y)
-        
-        yield batch_x, batch_y
+            yield batch_x, batch_y
 
 
 def train_model(args):
@@ -209,13 +210,13 @@ def train_model(args):
     # Train model
     print(f"Starting training for {args.epochs} epochs...")
     history = model.fit(
-        train_gen,
-        steps_per_epoch=train_steps,
-        epochs=args.epochs,
-        validation_data=val_gen,
-        validation_steps=val_steps,
-        callbacks=callbacks
-    )
+    train_gen,
+    steps_per_epoch=train_steps,
+    epochs=args.epochs,
+    validation_data=val_gen,
+    validation_steps=val_steps,
+    callbacks=callbacks
+)
     
     # Save final model
     final_model_path = os.path.join(args.model_dir, 'combined_model_final.h5')
